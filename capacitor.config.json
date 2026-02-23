@@ -1,0 +1,20 @@
+{
+  "appId": "com.denchat.app",
+  "appName": "Den Chat",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_icon",
+      "iconColor": "#6366f1"
+    }
+  },
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false,
+    "minWebViewVersion": 55
+  }
+}
