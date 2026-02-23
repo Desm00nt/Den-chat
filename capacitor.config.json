@@ -3,7 +3,8 @@
   "appName": "Den Chat",
   "webDir": "dist",
   "server": {
-    "androidScheme": "https"
+    "androidScheme": "https",
+    "cleartext": true
   },
   "plugins": {
     "LocalNotifications": {
@@ -14,7 +15,9 @@
   "android": {
     "allowMixedContent": true,
     "captureInput": true,
-    "webContentsDebuggingEnabled": false,
-    "minWebViewVersion": 55
+    "webContentsDebuggingEnabled": true,
+    "initialFocus": true,
+    "backgroundColor": "#0f172a",
+    "minWebViewVersion": 60
   }
 }
