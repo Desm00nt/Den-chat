@@ -9,6 +9,7 @@ export function App() {
   const {
     profile,
     contacts,
+    groups,
     activeChat,
     messages,
     onlineStatus,
@@ -17,9 +18,10 @@ export function App() {
     error,
     unreadCounts,
     callState,
+    queueSize,
     createProfile,
     addContact,
-    setActiveChat,
+    selectChat,
     sendMessage,
     sendTyping,
     connectToContact,
@@ -29,6 +31,8 @@ export function App() {
     rejectCall,
     endCall,
     toggleMute,
+    resetProfile,
+    createGroup,
   } = useChat();
 
   // No profile yet — show welcome
@@ -55,6 +59,7 @@ export function App() {
   }
 
   const activeContact = contacts.find(c => c.peerId === activeChat);
+  const activeGroup = groups.find(g => g.id === activeChat);
 
   return (
     <div className="h-[100dvh] flex bg-slate-950 overflow-hidden">
@@ -74,15 +79,23 @@ export function App() {
         <ChatList
           profile={profile}
           contacts={contacts}
+          groups={groups}
           onlineStatus={onlineStatus}
           unreadCounts={unreadCounts}
-          onSelectChat={(peerId) => {
-            setActiveChat(peerId);
-            connectToContact(peerId);
+          onSelectChat={(chatId, type) => {
+            selectChat(chatId, type);
+            if (type === 'contact') {
+              connectToContact(chatId);
+            }
           }}
           onAddContact={addContact}
+          onCreateGroup={async (name, memberIds) => {
+            await createGroup(name, memberIds);
+          }}
+          onDeleteProfile={resetProfile}
           getLastMessage={getLastMessage}
           activeChat={activeChat}
+          queueSize={queueSize}
         />
       </div>
 
@@ -98,10 +111,23 @@ export function App() {
             isOnline={onlineStatus.get(activeChat) || false}
             isTyping={typingStatus.get(activeChat) || false}
             onSendMessage={sendMessage}
-            onBack={() => setActiveChat(null)}
+            onBack={() => selectChat('', 'contact')}
             onSendTyping={sendTyping}
             onConnect={connectToContact}
             onStartCall={startCall}
+          />
+        ) : activeChat && activeGroup ? (
+          <ChatView
+            profile={profile}
+            contact={{ peerId: activeGroup.id, name: activeGroup.name, addedAt: activeGroup.createdAt }}
+            messages={messages}
+            isOnline={true}
+            isTyping={false}
+            onSendMessage={sendMessage}
+            onBack={() => selectChat('', 'contact')}
+            onSendTyping={() => {}}
+            onConnect={() => {}}
+            onStartCall={() => {}}
           />
         ) : (
           <div className="flex-1 flex items-center justify-center">
@@ -112,7 +138,7 @@ export function App() {
                 </svg>
               </div>
               <h3 className="text-xl font-semibold text-white">Den Chat</h3>
-              <p className="text-slate-500 max-w-xs">Выберите чат из списка или добавьте новый контакт чтобы начать общение</p>
+              <p className="text-slate-500 max-w-xs">Выберите чат или добавьте новый контакт</p>
             </div>
           </div>
         )}
