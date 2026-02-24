@@ -53,6 +53,7 @@ export function useChat() {
   const [error, setError] = useState<string | null>(null);
   const [unreadCounts, setUnreadCounts] = useState<Map<string, number>>(new Map());
   const [callState, setCallState] = useState<CallState>(initialCallState);
+  const [queueSize, setQueueSize] = useState(0);
 
   const activeChatRef = useRef(activeChat);
   const profileRef = useRef(profile);
@@ -63,6 +64,14 @@ export function useChat() {
   useEffect(() => { activeChatRef.current = activeChat; }, [activeChat]);
   useEffect(() => { profileRef.current = profile; }, [profile]);
   useEffect(() => { contactsRef.current = contacts; }, [contacts]);
+
+  // Track queue size
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setQueueSize(peerManager.getQueueSize());
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Initialize notifications on mount
   useEffect(() => {
@@ -150,6 +159,9 @@ export function useChat() {
             text: data.text,
             timestamp: data.timestamp,
             status: 'delivered',
+            image: data.image,
+            imageWidth: data.imageWidth,
+            imageHeight: data.imageHeight,
           };
           saveMessage(msg);
 
@@ -174,11 +186,9 @@ export function useChat() {
               next.set(chatId, (next.get(chatId) || 0) + 1);
               return next;
             });
-
-            // 🔔 Push notification for new message (only if not in that chat)
             notificationManager.notifyMessage(
               data.fromName || fromPeerId,
-              data.text
+              data.text || '📷 Фото'
             );
           }
         } else if (data.type === 'status') {
@@ -187,7 +197,6 @@ export function useChat() {
           } else if (data.status === 'stopped-typing') {
             setTypingStatus(prev => new Map(prev).set(fromPeerId, false));
           } else if (data.status === 'online') {
-            // 🔔 Notify contact came online
             const contactName = data.fromName || fromPeerId;
             notificationManager.notifyContactOnline(contactName);
           }
@@ -205,7 +214,6 @@ export function useChat() {
           );
         } else if (data.type === 'call-signal') {
           if (data.signal === 'ended' || data.signal === 'rejected') {
-            // 🔔 Missed call notification if was ringing
             if (data.signal === 'rejected') {
               const callerContact = contactsRef.current.find(c => c.peerId === fromPeerId);
               notificationManager.notifyMissedCall(callerContact?.name || fromPeerId);
@@ -216,7 +224,6 @@ export function useChat() {
             setCallState(initialCallState);
           }
         } else if (data.type === 'group-invite') {
-          // Received group invitation
           const newGroup: GroupChat = {
             id: data.groupId,
             name: data.groupName,
@@ -235,7 +242,6 @@ export function useChat() {
             `${data.fromName} добавил вас в группу`
           );
         } else if (data.type === 'group-message') {
-          // Received group message
           const msg: ChatMessage = {
             id: data.id,
             chatId: data.groupId,
@@ -287,10 +293,7 @@ export function useChat() {
       peerManager.onIncomingCall((callerPeerId: string, call: MediaConnection) => {
         const callerContact = contactsRef.current.find(c => c.peerId === callerPeerId);
         const callerName = callerContact?.name || callerPeerId;
-
-        // 🔔 Push notification + ringtone for incoming call
         notificationManager.notifyIncomingCall(callerName);
-
         setCallState({
           active: true,
           peerId: callerPeerId,
@@ -322,13 +325,14 @@ export function useChat() {
         setCallState(initialCallState);
       });
 
-      // Connect to all saved contacts
+      // Connect to all saved contacts and watch them
       const savedContacts = await getContacts();
       for (const contact of savedContacts) {
+        peerManager.watchContact(contact.peerId);
         try {
           await peerManager.connectTo(contact.peerId);
         } catch {
-          // Contact is offline
+          // Contact is offline — will auto-retry via keepalive
         }
       }
     } catch (err) {
@@ -360,6 +364,9 @@ export function useChat() {
       return [...filtered, contact];
     });
 
+    // Watch this contact for auto-reconnection
+    peerManager.watchContact(peerId);
+
     try {
       await peerManager.connectTo(peerId);
       peerManager.send(peerId, {
@@ -369,7 +376,7 @@ export function useChat() {
         fromName: profile!.name,
       });
     } catch {
-      // Contact might be offline
+      // Contact might be offline — will auto-retry
     }
   }, [profile]);
 
@@ -400,41 +407,26 @@ export function useChat() {
       if (group) {
         for (const memberId of group.members) {
           if (memberId !== profile.peerId) {
-            try {
-              if (!peerManager.isConnectedTo(memberId)) {
-                await peerManager.connectTo(memberId);
-              }
-              peerManager.send(memberId, {
-                type: 'group-message',
-                id: msgId,
-                groupId: group.id,
-                from: profile.peerId,
-                fromName: profile.name,
-                text: text || '',
-                timestamp: msg.timestamp,
-                image,
-                imageWidth,
-                imageHeight,
-              });
-            } catch {
-              // Member offline
-            }
+            peerManager.sendOrQueue(memberId, {
+              type: 'group-message',
+              id: msgId,
+              groupId: group.id,
+              from: profile.peerId,
+              fromName: profile.name,
+              text: text || '',
+              timestamp: msg.timestamp,
+              image,
+              imageWidth,
+              imageHeight,
+            });
           }
         }
       }
       return;
     }
 
-    // Direct message
-    if (!peerManager.isConnectedTo(activeChat)) {
-      try {
-        await peerManager.connectTo(activeChat);
-      } catch {
-        return;
-      }
-    }
-
-    const sent = peerManager.send(activeChat, {
+    // Direct message — use sendOrQueue for reliability
+    const payload: MessagePayload = {
       type: 'chat-message',
       id: msgId,
       from: profile.peerId,
@@ -444,12 +436,27 @@ export function useChat() {
       image,
       imageWidth,
       imageHeight,
-    });
+    };
+
+    // Try to connect first if not connected
+    if (!peerManager.isConnectedTo(activeChat)) {
+      try {
+        await peerManager.connectTo(activeChat);
+      } catch {
+        // Offline — sendOrQueue will queue it
+      }
+    }
+
+    const sent = peerManager.sendOrQueue(activeChat, payload);
 
     if (sent) {
-      msg.status = 'sent';
-      await saveMessage(msg);
+      const updatedMsg = { ...msg, status: 'sent' as const };
+      await saveMessage(updatedMsg);
+      setMessages(prev =>
+        prev.map(m => m.id === msgId ? updatedMsg : m)
+      );
     }
+    // If not sent, it's queued and will be delivered when peer comes online
   }, [activeChat, activeChatType, groups, profile]);
 
   const sendTyping = useCallback((isTyping: boolean) => {
@@ -463,6 +470,7 @@ export function useChat() {
   }, [activeChat, profile]);
 
   const connectToContact = useCallback(async (peerId: string) => {
+    peerManager.watchContact(peerId);
     try {
       await peerManager.connectTo(peerId);
       if (profile) {
@@ -474,7 +482,7 @@ export function useChat() {
         });
       }
     } catch {
-      // offline
+      // offline — watched, will auto-retry
     }
   }, [profile]);
 
@@ -516,7 +524,6 @@ export function useChat() {
     if (!callState.mediaConnection) return;
 
     try {
-      // Stop ringtone when answering
       notificationManager.stopRingtone();
       await peerManager.answerCall(callState.mediaConnection);
       setCallState(prev => ({ ...prev, status: 'connected' }));
@@ -586,21 +593,14 @@ export function useChat() {
 
     // Notify all members about the group
     for (const memberId of memberIds) {
-      try {
-        if (!peerManager.isConnectedTo(memberId)) {
-          await peerManager.connectTo(memberId);
-        }
-        peerManager.send(memberId, {
-          type: 'group-invite',
-          groupId: group.id,
-          groupName: group.name,
-          members: group.members,
-          from: profile.peerId,
-          fromName: profile.name,
-        });
-      } catch {
-        // Member offline
-      }
+      peerManager.sendOrQueue(memberId, {
+        type: 'group-invite',
+        groupId: group.id,
+        groupName: group.name,
+        members: group.members,
+        from: profile.peerId,
+        fromName: profile.name,
+      });
     }
 
     return group;
@@ -625,6 +625,7 @@ export function useChat() {
     error,
     unreadCounts,
     callState,
+    queueSize,
     createProfile,
     addContact,
     setActiveChat,
