@@ -59,6 +59,20 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
+      - name: Set version code from run number
+        run: |
+          BUILD_GRADLE="android/app/build.gradle"
+          # Use GitHub run number as versionCode for auto-increment
+          VERSION_CODE=${{ github.run_number }}
+          VERSION_NAME="1.0.${VERSION_CODE}"
+          
+          # Update versionCode
+          sed -i "s/versionCode [0-9]*/versionCode ${VERSION_CODE}/" $BUILD_GRADLE
+          # Update versionName
+          sed -i "s/versionName \"[^\"]*\"/versionName \"${VERSION_NAME}\"/" $BUILD_GRADLE
+          
+          echo "📦 Version: ${VERSION_NAME} (code: ${VERSION_CODE})"
+
       - name: Create network security config
         run: |
           mkdir -p android/app/src/main/res/xml
@@ -75,8 +89,20 @@ jobs:
                   <domain includeSubdomains="true">peerjs.com</domain>
                   <domain includeSubdomains="true">global.stun.twilio.com</domain>
                   <domain includeSubdomains="true">stun.l.google.com</domain>
+                  <domain includeSubdomains="true">openrelay.metered.ca</domain>
               </domain-config>
           </network-security-config>
+          XMLEOF
+
+      - name: Create file_paths.xml
+        run: |
+          cat > android/app/src/main/res/xml/file_paths.xml << 'XMLEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <paths>
+              <external-path name="my_images" path="." />
+              <cache-path name="my_cache_images" path="." />
+              <files-path name="my_files" path="." />
+          </paths>
           XMLEOF
 
       - name: Update AndroidManifest
@@ -97,6 +123,8 @@ jobs:
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <uses-permission android:name="android.permission.CAMERA" />
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
           
               <application
                   android:allowBackup="true"
@@ -138,17 +166,6 @@ jobs:
           </manifest>
           MANIFESTEOF
 
-      - name: Create file_paths.xml
-        run: |
-          cat > android/app/src/main/res/xml/file_paths.xml << 'XMLEOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <paths>
-              <external-path name="my_images" path="." />
-              <cache-path name="my_cache_images" path="." />
-              <files-path name="my_files" path="." />
-          </paths>
-          XMLEOF
-
       - name: Build Debug APK
         run: |
           cd android
@@ -170,6 +187,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: DenChat-debug
+          name: DenChat-v1.0.${{ github.run_number }}
           path: android/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 30
+          retention-days: 90
